@@ -521,7 +521,7 @@ class MPSSEProbe(DebugProbe):
 	}
 
 	GPIO_INIT = "ftdi.gpio_init_mask"
-	GPIO_DIR = "fdti.gpio_dir_mask"
+	GPIO_DIR = "ftdi.gpio_dir_mask"
 	SRST = "ftdi.srst_mask"
 	SWDIO_OE = "ftdi.swdio_oe_mask"
 	SWD_EN = "ftdi.swd_en_mask"
