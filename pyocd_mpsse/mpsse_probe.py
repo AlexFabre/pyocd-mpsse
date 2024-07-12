@@ -414,8 +414,12 @@ class FtdiMPSSE(object):
 
 class FindMPSSEProbe(object):
 	"""@brief Custom matcher to be used in core.find()"""
-
-	VID_PID = (0x22B7, 0x150D)  # Match for a isodebug
+	SUPPORTED_VIDS_PIDS = [
+		(0x403, 0x6010),  #FT2232C/D/L, FT2232HL/Q
+		(0x403, 0x6011),  #FT4232HL/Q
+		(0x403, 0x6014),  #FT232HL/Q
+		(0x22B7, 0x150D), # Match for a isodebug 
+	]
 
 	def __init__(self, serial=None):
 		"""@brief Create a new FindMPSSEprobe object with an optional serial number"""
@@ -425,7 +429,7 @@ class FindMPSSEProbe(object):
 		"""@brief Return True if this is an FTDI device, False otherwise"""
 
 		# Check if vid, pid and the device class are valid ones for an FTDI MPSSE probe.
-		if (dev.idVendor, dev.idProduct) != self.VID_PID:
+		if (dev.idVendor, dev.idProduct) not in self.SUPPORTED_VIDS_PIDS:
 			return False
 
 		# Make sure the device has an active configuration
