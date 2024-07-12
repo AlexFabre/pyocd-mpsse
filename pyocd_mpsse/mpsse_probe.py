@@ -595,6 +595,13 @@ class MPSSEProbe(DebugProbe):
 		self._is_open = True
 
 	def close(self):
+		# reset gpio to initial state before closing
+		self._output = self.session.options.get(self.GPIO_INIT)
+		self._direction = self.session.options.get(self.GPIO_DIR)
+		self._link.set_data_bits_low_byte(self._output & 0xFF, self._direction & 0xFF)
+		self._link.set_data_bits_high_byte(self._output >> 8, self._direction >> 8)
+		self._link.flush_queue()
+		
 		self._link.close()
 		self._is_open = False
 
