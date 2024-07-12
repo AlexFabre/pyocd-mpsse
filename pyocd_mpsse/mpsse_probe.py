@@ -767,7 +767,14 @@ class MPSSEProbe(DebugProbe):
 		# This is a safe read
 		# Send a command with a read AP/DP request
 		self._swd_command(self.READ, APnDP, addr)
-		self._read_check_swd_ack()
+		try:
+			self._read_check_swd_ack()
+		except (exceptions.TransferFaultError, exceptions.TransferTimeoutError) as e:
+			#in case ACK indicates error during read we need to clock one more time to transfare back bus controll to FTDI
+			self._swd_swdio_en(False)
+			self._link.clock_data_in(1) # on error need to clean up bus
+			self._link.get_bits() #consume any remaining data
+			raise e #rethrow exeption
 
 		# Read + 32 (data) + 1 (parity) + 1 (Trn) bits
 		self._swd_swdio_en(False)
