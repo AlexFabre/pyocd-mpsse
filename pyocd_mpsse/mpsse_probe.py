@@ -414,8 +414,12 @@ class FtdiMPSSE(object):
 
 class FindMPSSEProbe(object):
 	"""@brief Custom matcher to be used in core.find()"""
-
-	VID_PID = (0x22B7, 0x150D)  # Match for a isodebug
+	SUPPORTED_VIDS_PIDS = [
+		(0x403, 0x6010),  #FT2232C/D/L, FT2232HL/Q
+		(0x403, 0x6011),  #FT4232HL/Q
+		(0x403, 0x6014),  #FT232HL/Q
+		(0x22B7, 0x150D), # Match for a isodebug 
+	]
 
 	def __init__(self, serial=None):
 		"""@brief Create a new FindMPSSEprobe object with an optional serial number"""
@@ -425,7 +429,7 @@ class FindMPSSEProbe(object):
 		"""@brief Return True if this is an FTDI device, False otherwise"""
 
 		# Check if vid, pid and the device class are valid ones for an FTDI MPSSE probe.
-		if (dev.idVendor, dev.idProduct) != self.VID_PID:
+		if (dev.idVendor, dev.idProduct) not in self.SUPPORTED_VIDS_PIDS:
 			return False
 
 		# Make sure the device has an active configuration
@@ -591,6 +595,13 @@ class MPSSEProbe(DebugProbe):
 		self._is_open = True
 
 	def close(self):
+		# reset gpio to initial state before closing
+		self._output = self.session.options.get(self.GPIO_INIT)
+		self._direction = self.session.options.get(self.GPIO_DIR)
+		self._link.set_data_bits_low_byte(self._output & 0xFF, self._direction & 0xFF)
+		self._link.set_data_bits_high_byte(self._output >> 8, self._direction >> 8)
+		self._link.flush_queue()
+		
 		self._link.close()
 		self._is_open = False
 
@@ -756,7 +767,14 @@ class MPSSEProbe(DebugProbe):
 		# This is a safe read
 		# Send a command with a read AP/DP request
 		self._swd_command(self.READ, APnDP, addr)
-		self._read_check_swd_ack()
+		try:
+			self._read_check_swd_ack()
+		except (exceptions.TransferFaultError, exceptions.TransferTimeoutError) as e:
+			#in case ACK indicates error during read we need to clock one more time to transfare back bus controll to FTDI
+			self._swd_swdio_en(False)
+			self._link.clock_data_in(1) # on error need to clean up bus
+			self._link.get_bits() #consume any remaining data
+			raise e #rethrow exeption
 
 		# Read + 32 (data) + 1 (parity) + 1 (Trn) bits
 		self._swd_swdio_en(False)
