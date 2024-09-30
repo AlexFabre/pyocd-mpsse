@@ -160,6 +160,7 @@ class FtdiMPSSE(object):
 		self.purge()
 
 	def close(self):
+		util.dispose_resources(self._dev)
 		self._if = None
 		self._wr_ep = None
 		self._rd_ep = None
