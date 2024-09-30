@@ -317,7 +317,7 @@ class FtdiMPSSE(object):
 		if (frequency > (60000000 // 2 // 65536) and self.divide_by_5_config(False)):
 			base_clock = 60000000
 		else:
-			_divide_by_5_config(self, True)
+			self.divide_by_5_config(self, True)
 			base_clock = 12000000
 
 		divisor = (base_clock // 2 + frequency - 1) // frequency - 1;
