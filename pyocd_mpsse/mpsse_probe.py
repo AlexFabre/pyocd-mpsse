@@ -33,7 +33,6 @@ from pyocd.core.options import OptionInfo
 from pyocd.core.plugin import Plugin
 from pyocd.utility.mask import parity32_high
 
-import sys
 LOG = logging.getLogger(__name__)
 #LOG.setLevel(logging.DEBUG)
 
@@ -110,12 +109,15 @@ class FtdiMPSSE(object):
 			raise exceptions.ProbeError()
 
 		# Fix device busy error on WSL (Windows subsystem for linux)
-		if (sys.platform.startswith('linux') and self._dev.is_kernel_driver_active(channel)):
-			try:
+		try:
+			if (self._dev.is_kernel_driver_active(channel)):
 				self._dev.detach_kernel_driver(channel)
-			except core.USBError as e:
-				raise exceptions.ProbeError("Could not detatch kernel driver from interface(%s): %s"%(channel, str(e)))
-	
+		except core.USBError as e:
+			raise exceptions.ProbeError("Could not detatch kernel driver from interface(%s): %s"%(channel, str(e)))
+		except NotImplementedError:
+			# Windows will cause not implemented error
+			pass
+
 		device_types = {
 			0x500: ChipType.FT2232C,
 			0x700: ChipType.FT2232H,
