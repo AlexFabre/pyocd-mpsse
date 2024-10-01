@@ -162,7 +162,28 @@ class FtdiMPSSE(object):
 		self.purge()
 
 	def close(self):
+		# Reset cmd to port
+		self._dev.ctrl_transfer(self.FTDI_DEVICE_OUT_REQTYPE,
+		                        self.SIO_RESET_REQUEST,
+								self.SIO_RESET_SIO,
+								self._if.bInterfaceNumber + 1)
+		# Clean tx and rx buffers
+		self.purge()
+	
+		# Release interface
+		self._dev._ctx.managed_release_interface(self._dev, self._if)
+		
+		# Reattach kernel driver
+		try:
+			self._dev.attach_kernel_driver(self._if.bInterfaceNumber)
+		except (NotImplementedError, core.USBError):
+			# Windows will cause not implemented error
+			pass
+		
+		# Release device it self
 		util.dispose_resources(self._dev)
+		
+		# Clean up other variables
 		self._if = None
 		self._wr_ep = None
 		self._rd_ep = None
@@ -443,17 +464,20 @@ class FindMPSSEProbe(object):
 		if (dev.idVendor, dev.idProduct) not in self.SUPPORTED_VIDS_PIDS:
 			return False
 
+		cfg = None
 		# Make sure the device has an active configuration
 		try:
 			# This can fail on Linux if the configuration is already active.
-			dev.set_configuration()
+			cfg = dev.get_active_configuration()
+			
 		except Exception:
 			# But do no act on possible errors, they'll be caught in the next try: clause
-			pass
+			cfg = None
 
 		try:
 			# This raises when no configuration is set
-			dev.get_active_configuration()
+			if cfg is None:
+				dev.set_configuration()
 
 			# Now read the serial. This will raise if there are access problems.
 			serial = dev.serial_number
