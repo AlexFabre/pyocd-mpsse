@@ -78,9 +78,9 @@ class FtdiMPSSE(object):
 
 	def __init__(self, dev):
 		self._dev = dev
-		self._probe_id = dev.serial_number
-		self._vend = dev.manufacturer
-		self._prod = dev.product
+		self._probe_id = dev.serial_number or "Unknown Serial"
+		self._vend = dev.manufacturer or "Unknown Manufacturer"
+		self._prod = dev.product or "Unknown Product"
 		# USB interface and endpoints, will be assigned in open()
 		self._if = None
 		self._wr_ep = None
