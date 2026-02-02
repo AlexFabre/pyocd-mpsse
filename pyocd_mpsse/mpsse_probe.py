@@ -684,11 +684,15 @@ class MPSSEProbe(DebugProbe):
 		# Take each sequence 'seq' in sequences
 		for seq in sequences:
 			if len(seq) == 1:
+				# Read sequence: only bit count provided
 				bits = seq[0]
-				self._link.q_read_bits(bits)
+				self._swd_swdio_en(False)
+				self._link.clock_data_in(bits)
 				reads_lengths.append((bits + 7) // 8)
 			elif len(seq) == 2:
-				self._link.q_write_bits(seq[1], seq[0])
+				# Write sequence: bit count and data provided
+				self._swd_swdio_en(True)
+				self._link.clock_data_out(seq[1], seq[0])
 			else:
 				# Ignore malformed entry, raise or return failure? Ignore for the moment.
 				pass
