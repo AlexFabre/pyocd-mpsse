@@ -837,17 +837,20 @@ class MPSSEProbe(DebugProbe):
 	def _write_reg(self, addr, APnDP, value):
 		LOG.debug("write_reg")
 		# Send a command with a write AP/DP request
+		# This queues: cmd_out(8) + ack_in(5)
 		self._swd_command(self.WRITE, APnDP, addr)
-		self._read_check_swd_ack()
 
 		# Prepare the write buffer
 		value |= parity32_high(value)
 
-		# Send the value: 32 (data) + 1 (parity) bits (no Trn needed)
-		# Insert also 3 bits of idle
+		# Queue the data: 32 (data) + 1 (parity) + 3 (idle) bits
+		# We send data before checking ACK to reduce USB round-trips from 2 to 1
 		self._swd_swdio_en(True)
 		self._link.clock_data_out(value, 32 + 1 + 3)
-		self._link.flush_queue()
+
+		# Now flush everything and check ACK
+		# get_bits() flushes the queue and returns only the ACK (clock_data_out doesn't read)
+		self._read_check_swd_ack()
 
 	def _swd_command(self, RnW, APnDP, addr):
 		"""@brief Builds and queues an SWD command byte plus an ACK read"""
