@@ -152,7 +152,7 @@ class FtdiMPSSE(object):
 
 		self._dev.ctrl_transfer(self.FTDI_DEVICE_OUT_REQTYPE,
 		                        self.SIO_SET_LATENCY_TIMER_REQUEST,
-								255,
+								2,  # Low latency (2ms) for better throughput
 								channel + 1)
 
 		self._dev.ctrl_transfer(self.FTDI_DEVICE_OUT_REQTYPE,
