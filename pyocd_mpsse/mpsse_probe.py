@@ -67,10 +67,14 @@ class FtdiMPSSE(object):
 	FTDI_DEVICE_OUT_REQTYPE = util.build_request_type(util.CTRL_OUT, util.CTRL_TYPE_VENDOR, util.CTRL_RECIPIENT_DEVICE)
 
 	SIO_RESET_REQUEST             = 0x00
+	SIO_SET_FLOW_CTRL_REQUEST     = 0x02
 	SIO_SET_LATENCY_TIMER_REQUEST = 0x09
 	SIO_SET_BITMODE_REQUEST       = 0x0B
 
 	BITMODE_MPSSE = 0x02
+
+	# Flow control modes
+	SIO_DISABLE_FLOW_CTRL = 0x0
 
 	SIO_RESET_SIO = 0
 	SIO_RESET_PURGE_RX = 1
@@ -150,9 +154,15 @@ class FtdiMPSSE(object):
 								self.SIO_RESET_SIO,
 								channel + 1)
 
+		# Disable flow control for maximum throughput
+		self._dev.ctrl_transfer(self.FTDI_DEVICE_OUT_REQTYPE,
+		                        self.SIO_SET_FLOW_CTRL_REQUEST,
+								self.SIO_DISABLE_FLOW_CTRL,
+								channel + 1)
+
 		self._dev.ctrl_transfer(self.FTDI_DEVICE_OUT_REQTYPE,
 		                        self.SIO_SET_LATENCY_TIMER_REQUEST,
-								2,  # Low latency (2ms) for better throughput
+								1,  # Minimum latency (1ms) for best throughput
 								channel + 1)
 
 		self._dev.ctrl_transfer(self.FTDI_DEVICE_OUT_REQTYPE,
