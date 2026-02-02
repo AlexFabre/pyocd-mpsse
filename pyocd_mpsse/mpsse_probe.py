@@ -62,7 +62,7 @@ class FtdiMPSSE(object):
 
 	RCV_HDR_LEN = 2  # Status header at beginning of every USB packet
 
-	BUFFER_SIZE = 4096  # Size of buffers
+	BUFFER_SIZE = 16384  # Size of buffers (16KB for better throughput)
 
 	FTDI_DEVICE_OUT_REQTYPE = util.build_request_type(util.CTRL_OUT, util.CTRL_TYPE_VENDOR, util.CTRL_RECIPIENT_DEVICE)
 
