@@ -34,7 +34,7 @@ from pyocd.core.plugin import Plugin
 from pyocd.utility.mask import parity32_high
 
 LOG = logging.getLogger(__name__)
-#LOG.setLevel(logging.DEBUG)
+# LOG.setLevel(logging.DEBUG)
 
 POS_EDGE_OUT = 0x00
 NEG_EDGE_OUT = 0x01
@@ -359,11 +359,15 @@ class FtdiMPSSE(object):
 		if self._read_length > 0:
 			self._q_write_bytes([0x87])
 
-		LOG.debug("flush %u bytes: %s", len(self._queue), self._queue)
+		LOG.debug("flush %u bytes (expecting %u read bytes): %s", len(self._queue), self._read_length,
+		          [hex(x) for x in self._queue[:64]] if len(self._queue) <= 64 else [hex(x) for x in self._queue[:64]] + ['...'])
 		try:
-			self._wr_ep.write(self._queue)
-		except Exception:
+			bytes_written = self._wr_ep.write(self._queue)
+			if bytes_written != len(self._queue):
+				LOG.warning("USB write incomplete: wrote %u of %u bytes", bytes_written, len(self._queue))
+		except Exception as ex:
 			# Anything from the USB layer assumes probe is no longer connected
+			LOG.error("USB write failed: %s", ex)
 			raise exceptions.ProbeDisconnected("Cannot access probe " + self._probe_id)
 		finally:
 			# Make sure there are no leftovers
@@ -385,21 +389,27 @@ class FtdiMPSSE(object):
 	def get_bits(self):
 		"""@brief Execute all the queued probe actions and return read values"""
 		self.flush_queue()
-		LOG.debug("get_bits read %u bytes", self.BUFFER_SIZE)
+		LOG.debug("get_bits: requesting read of up to %u bytes (expecting %u data bytes)", self.BUFFER_SIZE, self._read_length)
 		try:
 			# TODO: Figure out how the read is terminated. Does FTDI always send a ZLP?
 			# Or maybe we need to read exactly the expected size to avoid timeout if
 			# it's a multiple of wMaxPacketSize.
 			received = self._rd_ep.read(self.BUFFER_SIZE, timeout=10000)
-		except Exception:
+		except Exception as ex:
 			# Anything from the USB layer assumes probe is no longer connected
+			LOG.error("USB read failed (expected %u bytes): %s", self._read_length, ex)
 			raise exceptions.ProbeDisconnected("Cannot access probe " + self._probe_id)
 
-		LOG.debug("got %u bytes", len(received))
+		LOG.debug("got %u bytes: %s", len(received), [hex(x) for x in received[:64]] if len(received) <= 64 else [hex(x) for x in received[:64]] + ['...'])
 		# Check for correct length of received data
 		remaining = self._read_length + self.RCV_HDR_LEN * (1 + self._read_length // (self._rd_ep.wMaxPacketSize - 2))
 		if remaining != len(received):
 			# Something went wrong, wrong number of bytes received
+			LOG.error("USB read length mismatch: expected %u bytes, received %u bytes. "
+			          "Read queue state: read_length=%u, max_packet_size=%u. "
+			          "Raw data (first 64 bytes): %s",
+			          remaining, len(received), self._read_length, self._rd_ep.wMaxPacketSize,
+			          [hex(x) for x in received[:64]])
 			self.purge()
 			raise exceptions.ProbeError(
 				"Mismatched header from %s: expected %u, received %u"
@@ -586,6 +596,13 @@ class MPSSEProbe(DebugProbe):
 		self._is_open = False
 		self._unique_id = self._link.get_unique_id()
 		self._reset = False
+		# Debug context tracking for protocol fault diagnosis
+		self._last_cmd_type = None  # 'read' or 'write'
+		self._last_cmd_ap_dp = None  # AP or DP
+		self._last_cmd_addr = None  # Register address
+		self._last_cmd_value = None  # Value for writes
+		self._cmd_history = []  # Recent command history (last 10 operations)
+		self._cmd_history_max = 10
 
 	@property
 	def description(self):
@@ -798,10 +815,12 @@ class MPSSEProbe(DebugProbe):
 			self.set_signal(0 if enable else mask, mask if enable else 0)
 
 	def _read_reg(self, addr, APnDP):
-		LOG.debug("read reg")
+		LOG.debug("read_reg addr=0x%X %s", addr, 'AP' if APnDP == self.AP else 'DP')
 		# This is a safe read
 		# Send a command with a read AP/DP request
 		self._swd_command(self.READ, APnDP, addr)
+		# Clear value since this is a read (no value to write)
+		self._last_cmd_value = None
 		try:
 			self._read_check_swd_ack()
 		except (exceptions.TransferFaultError, exceptions.TransferTimeoutError) as e:
@@ -831,9 +850,11 @@ class MPSSEProbe(DebugProbe):
 		return val
 
 	def _write_reg(self, addr, APnDP, value):
-		LOG.debug("write_reg")
+		LOG.debug("write_reg addr=0x%X value=0x%08X", addr, value)
 		# Send a command with a write AP/DP request
 		self._swd_command(self.WRITE, APnDP, addr)
+		# Track value for debugging before checking ACK
+		self._last_cmd_value = value
 		self._read_check_swd_ack()
 
 		# Prepare the write buffer
@@ -845,11 +866,44 @@ class MPSSEProbe(DebugProbe):
 		self._link.clock_data_out(value, 32 + 1 + 3)
 		self._link.flush_queue()
 
+	def _record_cmd_history(self, cmd_type, ap_dp, addr, value=None):
+		"""@brief Record command to history buffer for debugging"""
+		entry = {
+			'type': cmd_type,
+			'ap_dp': 'AP' if ap_dp == self.AP else 'DP',
+			'addr': addr,
+			'value': value
+		}
+		self._cmd_history.append(entry)
+		if len(self._cmd_history) > self._cmd_history_max:
+			self._cmd_history.pop(0)
+
+	def _format_cmd_history(self):
+		"""@brief Format command history for logging"""
+		if not self._cmd_history:
+			return "[]"
+		return ", ".join(
+			f"{e['type']} {e['ap_dp']} 0x{e['addr']:X}" + (f"=0x{e['value']:08X}" if e['value'] is not None else "")
+			for e in self._cmd_history[-5:]  # Last 5 commands
+		)
+
 	def _swd_command(self, RnW, APnDP, addr):
 		"""@brief Builds and queues an SWD command byte plus an ACK read"""
 		cmd = (APnDP << 1) + (RnW << 2) + ((addr << 1) & self.SWD_CMD_A32)
 		cmd |= parity32_high(cmd) >> (32 - 5)
 		cmd |= self.SWD_CMD_START | self.SWD_CMD_STOP | self.SWD_CMD_PARK
+
+		# Track command context for debugging
+		self._last_cmd_type = 'read' if RnW == self.READ else 'write'
+		self._last_cmd_ap_dp = APnDP
+		self._last_cmd_addr = addr
+
+		LOG.debug("SWD command: %s %s reg 0x%X, cmd_byte=0x%02X (binary: %s)",
+		          self._last_cmd_type.upper(),
+		          'AP' if APnDP == self.AP else 'DP',
+		          addr,
+		          cmd,
+		          format(cmd, '08b'))
 
 		# Write the command to the probe
 		self._swd_swdio_en(True)
@@ -861,24 +915,72 @@ class MPSSEProbe(DebugProbe):
 	def _read_check_swd_ack(self):
 		# Reads Trn + ACK, plus a following Trn bit if the cmd was a write
 		ack = self._link.get_bits()
+		LOG.debug("SWD ACK raw bits: %s", [hex(x) for x in ack])
 		self._check_swd_acks(ack)
 
 	def _check_swd_acks(self, raw_acks):
 		# Extract ACKs and collapse identical elements
-		acks = set((ack >> 1) & self.ACK_ALL for ack in raw_acks)
-		LOG.debug("acks: %s", acks)
+		# For each raw value: bit 0 is TRN, bits 1-3 are ACK[0:2]
+		extracted_acks = [(ack >> 1) & self.ACK_ALL for ack in raw_acks]
+		acks = set(extracted_acks)
+		LOG.debug("ACK check: extracted=%s from raw=%s (TRN bits: %s)",
+		          [format(a, '03b') for a in extracted_acks],
+		          [format(r, '05b') for r in raw_acks],
+		          [r & 1 for r in raw_acks])
 
 		# Remove ACK OK only if present
 		acks.difference_update({self.ACK_OK})
 
 		# If there's something left, we had a problem.
 		if len(acks) == 0:
+			# Record successful command to history
+			self._record_cmd_history(self._last_cmd_type, self._last_cmd_ap_dp,
+			                         self._last_cmd_addr, self._last_cmd_value)
 			return
 		else:
 			try:
 				# Raise the exception for the first problem found in set.
-				e = self.ACK_EXCEPTIONS[acks.pop()]
+				bad_ack = acks.pop()
+				e = self.ACK_EXCEPTIONS[bad_ack]
+				LOG.warning("SWD ACK error: %s (0b%s) during %s %s reg 0x%X. "
+				            "Raw ACK bits: %s. Recent commands: [%s]",
+				            "WAIT" if bad_ack == self.ACK_WAIT else "FAULT",
+				            format(bad_ack, '03b'),
+				            self._last_cmd_type.upper() if self._last_cmd_type else "?",
+				            'AP' if self._last_cmd_ap_dp == self.AP else 'DP' if self._last_cmd_ap_dp == self.DP else "?",
+				            self._last_cmd_addr if self._last_cmd_addr is not None else -1,
+				            [format(r, '05b') for r in raw_acks],
+				            self._format_cmd_history())
 			except KeyError:
+				# Log detailed info for protocol faults - these indicate unexpected ACK values
+				LOG.error("="*60)
+				LOG.error("PROTOCOL FAULT DETECTED")
+				LOG.error("="*60)
+				LOG.error("Unexpected ACK value: 0b%s (decimal: %d)",
+				          format(bad_ack, '03b'), bad_ack)
+				LOG.error("Raw ACK data: %s (binary: %s)",
+				          [hex(x) for x in raw_acks],
+				          [format(r, '05b') for r in raw_acks])
+				LOG.error("Failed operation: %s %s register 0x%X",
+				          self._last_cmd_type.upper() if self._last_cmd_type else "UNKNOWN",
+				          'AP' if self._last_cmd_ap_dp == self.AP else 'DP' if self._last_cmd_ap_dp == self.DP else "UNKNOWN",
+				          self._last_cmd_addr if self._last_cmd_addr is not None else -1)
+				LOG.error("Recent command history: [%s]", self._format_cmd_history())
+				LOG.error("Diagnosis hints:")
+				if bad_ack == 0b000:
+					LOG.error("  - ACK=0b000: SWDIO line stuck LOW. Check connections, target power.")
+				elif bad_ack == 0b111:
+					LOG.error("  - ACK=0b111: SWDIO line stuck HIGH. Check for bus contention.")
+				elif bad_ack == 0b011:
+					LOG.error("  - ACK=0b011: Unexpected. Possible OK+WAIT collision or noise.")
+				elif bad_ack == 0b101:
+					LOG.error("  - ACK=0b101: Unexpected. Possible OK+FAULT collision or noise.")
+				elif bad_ack == 0b110:
+					LOG.error("  - ACK=0b110: Unexpected. Possible WAIT+FAULT collision or noise.")
+				else:
+					LOG.error("  - Unknown pattern. Likely electrical noise or timing issue.")
+				LOG.error("  - Power cycle of target and probe may be required.")
+				LOG.error("="*60)
 				e = self.ACK_EXCEPTIONS[self.ACK_ALL]
 			raise e
 
